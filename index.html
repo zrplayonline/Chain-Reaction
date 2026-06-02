@@ -1,0 +1,597 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Quantum Chain</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@400;700;900&display=swap" rel="stylesheet">
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            background-color: #050510;
+            color: #fff;
+            overflow: hidden;
+            font-family: 'Orbitron', sans-serif;
+            touch-action: none; /* Prevent scrolling on mobile */
+        }
+        canvas {
+            display: block;
+            width: 100vw;
+            height: 100vh;
+        }
+        .overlay {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            background: rgba(5, 5, 16, 0.85);
+            backdrop-filter: blur(8px);
+            z-index: 10;
+        }
+        .hidden {
+            display: none !important;
+        }
+        button {
+            background: transparent;
+            border: 2px solid #00f3ff;
+            color: #00f3ff;
+            padding: 15px 30px;
+            font-size: 1.2rem;
+            text-transform: uppercase;
+            letter-spacing: 2px;
+            cursor: pointer;
+            border-radius: 8px;
+            transition: all 0.3s ease;
+            box-shadow: 0 0 10px rgba(0, 243, 255, 0.2);
+            font-family: 'Orbitron', sans-serif;
+            font-weight: 700;
+        }
+        button:hover {
+            background: #00f3ff;
+            color: #050510;
+            box-shadow: 0 0 20px rgba(0, 243, 255, 0.6);
+        }
+        #hud {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            padding: 20px;
+            display: flex;
+            justify-content: space-between;
+            pointer-events: none;
+            z-index: 5;
+            box-sizing: border-box;
+        }
+        .player-score {
+            font-size: 1.5rem;
+            font-weight: 700;
+            text-shadow: 0 0 10px currentColor;
+        }
+        #turn-indicator {
+            position: absolute;
+            top: 20px;
+            left: 50%;
+            transform: translateX(-50%);
+            font-size: 1.5rem;
+            font-weight: 900;
+            padding: 10px 20px;
+            border: 2px solid;
+            border-radius: 8px;
+            background: rgba(0,0,0,0.5);
+            text-shadow: 0 0 10px currentColor;
+        }
+    </style>
+</head>
+<body>
+    <div id="hud" class="hidden">
+        <div id="player1-score" class="player-score" style="color: #00f3ff;">P1: CYAN</div>
+        <div id="turn-indicator">TURN: CYAN</div>
+        <div id="player2-score" class="player-score" style="color: #ff00ff;">P2: NEON</div>
+    </div>
+
+    <div id="start-screen" class="overlay">
+        <h1 class="text-6xl font-bold mb-4 tracking-widest text-white text-center" style="text-shadow: 0 0 20px #00f3ff;">QUANTUM<br>CHAIN</h1>
+        <p class="text-gray-300 mb-8 max-w-md text-center text-sm md:text-base">Place atoms. Reach critical mass. Trigger chain reactions to dominate the grid.</p>
+        <div class="flex flex-col sm:flex-row gap-4">
+            <button onclick="startGame('pvp')">Player vs Player</button>
+            <button onclick="startGame('pvai')">Player vs AI</button>
+        </div>
+    </div>
+
+    <div id="game-over-screen" class="overlay hidden">
+        <h1 id="winner-text" class="text-5xl md:text-7xl font-bold mb-6 tracking-widest uppercase text-center">PLAYER WINS</h1>
+        <div class="flex flex-col sm:flex-row gap-4">
+            <button onclick="resetGame()">Play Again</button>
+            <button onclick="returnToMainMenu()">Main Menu</button>
+        </div>
+    </div>
+
+    <canvas id="gameCanvas"></canvas>
+
+    <script>
+        const canvas = document.getElementById('gameCanvas');
+        const ctx = canvas.getContext('2d');
+
+        // Game Constants
+        const COLS = 10;
+        const ROWS = 6;
+        let cellW, cellH;
+        
+        const PLAYERS = [
+            { id: 1, name: 'CYAN', color: '#00f3ff' },
+            { id: 2, name: 'NEON', color: '#ff00ff' }
+        ];
+
+        // Game State
+        let grid = [];
+        let currentPlayerIndex = 0;
+        let gameActive = false;
+        let isAnimating = false;
+        let particles = [];
+        let p1ActiveTurns = false;
+        let p2ActiveTurns = false;
+        let gameMode = 'pvp';
+        let gameOverTimeout = null;
+
+        function resize() {
+            canvas.width = window.innerWidth;
+            canvas.height = window.innerHeight;
+            
+            // Calculate grid dimensions to fit nicely in landscape
+            const padding = Math.min(canvas.width, canvas.height) * 0.1;
+            const availableW = canvas.width - padding * 2;
+            const availableH = canvas.height - padding * 2 - 80; // Space for HUD
+
+            cellW = availableW / COLS;
+            cellH = availableH / ROWS;
+
+            // Make cells square
+            const size = Math.min(cellW, cellH);
+            cellW = size;
+            cellH = size;
+
+            // Center the grid
+            ctx.translate(
+                (canvas.width - (cellW * COLS)) / 2,
+                (canvas.height - (cellH * ROWS)) / 2 + 30
+            );
+        }
+
+        window.addEventListener('resize', resize);
+        
+        // Input Handling
+        canvas.addEventListener('mousedown', (e) => handleInteraction(e));
+        canvas.addEventListener('touchstart', (e) => {
+            e.preventDefault();
+            handleInteraction(e.touches[0]);
+        }, { passive: false });
+
+        function handleInteraction(e) {
+            if (!gameActive || isAnimating) return;
+            if (gameMode === 'pvai' && currentPlayerIndex === 1) return; // Block input during AI turn
+
+            // Calculate exact click position relative to translated grid
+            const rect = canvas.getBoundingClientRect();
+            const gridXOffset = (canvas.width - (cellW * COLS)) / 2;
+            const gridYOffset = (canvas.height - (cellH * ROWS)) / 2 + 30;
+            
+            const mouseX = e.clientX - rect.left - gridXOffset;
+            const mouseY = e.clientY - rect.top - gridYOffset;
+
+            const col = Math.floor(mouseX / cellW);
+            const row = Math.floor(mouseY / cellH);
+
+            if (col >= 0 && col < COLS && row >= 0 && row < ROWS) {
+                processClick(col, row);
+            }
+        }
+
+        function startGame(mode) {
+            clearTimeout(gameOverTimeout);
+            if (mode) gameMode = mode;
+
+            document.getElementById('start-screen').classList.add('hidden');
+            document.getElementById('game-over-screen').classList.add('hidden');
+            document.getElementById('hud').classList.remove('hidden');
+            
+            const p2Score = document.getElementById('player2-score');
+            if (gameMode === 'pvai') {
+                PLAYERS[1].name = 'AI NEON';
+                p2Score.innerText = 'P2: AI NEON';
+            } else {
+                PLAYERS[1].name = 'NEON';
+                p2Score.innerText = 'P2: NEON';
+            }
+
+            initGrid();
+            currentPlayerIndex = 0;
+            p1ActiveTurns = false;
+            p2ActiveTurns = false;
+            isAnimating = false;
+            particles = [];
+            gameActive = true;
+            resize();
+            updateHUD();
+        }
+
+        function resetGame() {
+            startGame(gameMode);
+        }
+
+        function returnToMainMenu() {
+            clearTimeout(gameOverTimeout);
+            document.getElementById('game-over-screen').classList.add('hidden');
+            document.getElementById('hud').classList.add('hidden');
+            document.getElementById('start-screen').classList.remove('hidden');
+            gameActive = false;
+            particles = []; // Clear any residual animated particles
+            initGrid(); // Clear the board visually behind the menu
+        }
+
+        function updateHUD() {
+            const indicator = document.getElementById('turn-indicator');
+            const player = PLAYERS[currentPlayerIndex];
+            indicator.innerText = `TURN: ${player.name}`;
+            indicator.style.color = player.color;
+            indicator.style.borderColor = player.color;
+            indicator.style.boxShadow = `0 0 10px ${player.color}40`;
+        }
+
+        function makeAIMove() {
+            if (!gameActive) return;
+            
+            const aiPlayer = PLAYERS[1];
+            let validMoves = [];
+            
+            for (let x = 0; x < COLS; x++) {
+                for (let y = 0; y < ROWS; y++) {
+                    const cell = grid[x][y];
+                    if (cell.owner === null || cell.owner.id === aiPlayer.id) {
+                        validMoves.push({x, y, cell});
+                    }
+                }
+            }
+            
+            if (validMoves.length === 0) return;
+
+            // Simple AI: Prioritize moves that lead directly to an explosion
+            let bestMoves = validMoves.filter(m => m.cell.count === m.cell.capacity - 1);
+            
+            let chosenMove = bestMoves.length > 0 
+                ? bestMoves[Math.floor(Math.random() * bestMoves.length)]
+                : validMoves[Math.floor(Math.random() * validMoves.length)];
+
+            processClick(chosenMove.x, chosenMove.y);
+        }
+
+        function initGrid() {
+            grid = [];
+            for (let x = 0; x < COLS; x++) {
+                grid[x] = [];
+                for (let y = 0; y < ROWS; y++) {
+                    let capacity = 4; // Center
+                    if ((x === 0 && y === 0) || (x === 0 && y === ROWS - 1) || 
+                        (x === COLS - 1 && y === 0) || (x === COLS - 1 && y === ROWS - 1)) {
+                        capacity = 2; // Corners
+                    } else if (x === 0 || x === COLS - 1 || y === 0 || y === ROWS - 1) {
+                        capacity = 3; // Edges
+                    }
+                    grid[x][y] = { count: 0, capacity: capacity, owner: null };
+                }
+            }
+        }
+
+        function processClick(x, y) {
+            const cell = grid[x][y];
+            const player = PLAYERS[currentPlayerIndex];
+
+            // Validate Move
+            if (cell.owner !== null && cell.owner.id !== player.id) return;
+
+            // Track active turns for win condition
+            if (currentPlayerIndex === 0) p1ActiveTurns = true;
+            if (currentPlayerIndex === 1) p2ActiveTurns = true;
+
+            // Add Atom
+            cell.owner = player;
+            cell.count++;
+
+            // Check for chain reactions
+            let explosions = getExplodingCells();
+            if (explosions.length > 0) {
+                isAnimating = true;
+                triggerExplosions(explosions);
+            } else {
+                endTurn();
+            }
+        }
+
+        function endTurn() {
+            isAnimating = false;
+            if (checkWinCondition()) return;
+            
+            currentPlayerIndex = (currentPlayerIndex + 1) % PLAYERS.length;
+            updateHUD();
+
+            if (gameMode === 'pvai' && currentPlayerIndex === 1) {
+                setTimeout(makeAIMove, 500);
+            }
+        }
+
+        function getExplodingCells() {
+            let exploding = [];
+            for (let x = 0; x < COLS; x++) {
+                for (let y = 0; y < ROWS; y++) {
+                    if (grid[x][y].count >= grid[x][y].capacity) {
+                        exploding.push({x, y});
+                    }
+                }
+            }
+            return exploding;
+        }
+
+        function triggerExplosions(explosions) {
+            if (explosions.length === 0) {
+                let nextExplosions = getExplodingCells();
+                if (nextExplosions.length > 0) {
+                    triggerExplosions(nextExplosions);
+                } else {
+                    endTurn();
+                }
+                return;
+            }
+
+            explosions.forEach(({x, y}) => {
+                const cell = grid[x][y];
+                const player = cell.owner;
+                
+                cell.count -= cell.capacity;
+                if (cell.count === 0) cell.owner = null;
+
+                // Send particles to neighbors
+                const directions = [[0, -1], [1, 0], [0, 1], [-1, 0]];
+                directions.forEach(dir => {
+                    const nx = x + dir[0];
+                    const ny = y + dir[1];
+                    if (nx >= 0 && nx < COLS && ny >= 0 && ny < ROWS) {
+                        particles.push(new Particle(x, y, nx, ny, player));
+                    }
+                });
+            });
+        }
+
+        function checkWinCondition() {
+            if (!p1ActiveTurns || !p2ActiveTurns) return false;
+
+            let p1Count = 0;
+            let p2Count = 0;
+
+            for (let x = 0; x < COLS; x++) {
+                for (let y = 0; y < ROWS; y++) {
+                    if (grid[x][y].owner) {
+                        if (grid[x][y].owner.id === PLAYERS[0].id) p1Count++;
+                        if (grid[x][y].owner.id === PLAYERS[1].id) p2Count++;
+                    }
+                }
+            }
+
+            if (p1Count === 0) {
+                showGameOver(PLAYERS[1]);
+                return true;
+            }
+            if (p2Count === 0) {
+                showGameOver(PLAYERS[0]);
+                return true;
+            }
+            
+            return false;
+        }
+
+        function showGameOver(winner) {
+            gameActive = false;
+            document.getElementById('winner-text').innerText = `${winner.name} WINS!`;
+            document.getElementById('winner-text').style.color = winner.color;
+            document.getElementById('game-over-screen').classList.remove('hidden');
+            document.getElementById('hud').classList.add('hidden');
+            
+            // Automatically return to main menu after 3.5 seconds
+            gameOverTimeout = setTimeout(() => {
+                returnToMainMenu();
+            }, 3500);
+        }
+
+        class Particle {
+            constructor(startX, startY, endX, endY, player) {
+                this.startX = startX * cellW + cellW / 2;
+                this.startY = startY * cellH + cellH / 2;
+                this.endX = endX * cellW + cellW / 2;
+                this.endY = endY * cellH + cellH / 2;
+                this.x = this.startX;
+                this.y = this.startY;
+                this.targetGridX = endX;
+                this.targetGridY = endY;
+                this.player = player;
+                this.progress = 0;
+                this.speed = 0.08;
+            }
+
+            update() {
+                this.progress += this.speed;
+                if (this.progress >= 1) {
+                    const targetCell = grid[this.targetGridX][this.targetGridY];
+                    targetCell.owner = this.player;
+                    targetCell.count++;
+                    return true; // Reached destination
+                }
+                
+                // Ease out sine for smooth snapping
+                const ease = Math.sin((this.progress * Math.PI) / 2);
+                this.x = this.startX + (this.endX - this.startX) * ease;
+                this.y = this.startY + (this.endY - this.startY) * ease;
+                return false;
+            }
+
+            draw(ctx) {
+                ctx.beginPath();
+                // Bigger flying particles
+                const radius = Math.min(cellW, cellH) * 0.25; 
+                ctx.arc(this.x, this.y, radius, 0, Math.PI * 2);
+                ctx.fillStyle = this.player.color;
+                ctx.shadowBlur = 15;
+                ctx.shadowColor = this.player.color;
+                ctx.fill();
+                ctx.shadowBlur = 0;
+            }
+        }
+
+        let time = 0;
+        function drawBoard() {
+            // Background / Clear
+            ctx.save();
+            ctx.setTransform(1, 0, 0, 1, 0, 0);
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            ctx.restore();
+
+            if(grid.length === 0) return; // Safety check
+
+            // Draw Grid Lines
+            ctx.strokeStyle = 'rgba(255, 255, 255, 0.1)';
+            ctx.lineWidth = 2;
+            for (let x = 0; x <= COLS; x++) {
+                ctx.beginPath();
+                ctx.moveTo(x * cellW, 0);
+                ctx.lineTo(x * cellW, ROWS * cellH);
+                ctx.stroke();
+            }
+            for (let y = 0; y <= ROWS; y++) {
+                ctx.beginPath();
+                ctx.moveTo(0, y * cellH);
+                ctx.lineTo(COLS * cellW, y * cellH);
+                ctx.stroke();
+            }
+
+            // Draw Atoms inside cells
+            time += 0.05;
+            for (let x = 0; x < COLS; x++) {
+                for (let y = 0; y < ROWS; y++) {
+                    const cell = grid[x][y];
+                    if (cell.count > 0) {
+                        const centerX = x * cellW + cellW / 2;
+                        const centerY = y * cellH + cellH / 2;
+                        
+                        // Atom radius made larger
+                        const atomRadius = Math.min(cellW, cellH) * 0.25;
+
+                        for (let i = 0; i < cell.count; i++) {
+                            // Circular orbital offset based on count
+                            let offsetX = 0;
+                            let offsetY = 0;
+                            
+                            if (cell.count > 1) {
+                                const angle = time + (i * (Math.PI * 2) / cell.count);
+                                const orbitRadius = atomRadius * 0.4;
+                                offsetX = Math.cos(angle) * orbitRadius;
+                                offsetY = Math.sin(angle) * orbitRadius;
+                            }
+
+                            ctx.beginPath();
+                            ctx.arc(centerX + offsetX, centerY + offsetY, atomRadius, 0, Math.PI * 2);
+                            ctx.fillStyle = cell.owner.color;
+                            ctx.shadowBlur = 10;
+                            ctx.shadowColor = cell.owner.color;
+                            ctx.fill();
+                            ctx.shadowBlur = 0;
+                        }
+                    }
+                }
+            }
+
+            // Update and Draw Exploding Particles
+            if (particles.length > 0) {
+                for (let i = particles.length - 1; i >= 0; i--) {
+                    particles[i].draw(ctx);
+                    if (particles[i].update()) {
+                        particles.splice(i, 1);
+                    }
+                }
+                // Check secondary explosions once particles settle
+                if (particles.length === 0) {
+                    triggerExplosions([]); 
+                }
+            }
+        }
+
+        function animateLoop() {
+            drawBoard();
+            requestAnimationFrame(animateLoop);
+        }
+
+        // Initialize and kick off the engine
+        window.onload = function() {
+            initGrid();
+            resize();
+            animateLoop();
+        }
+    </script>
+  <!-- Fullscreen Launcher -->
+<div id="fullscreen-start" style="
+position:fixed;
+top:0;
+left:0;
+width:100%;
+height:100%;
+background:#000;
+display:flex;
+justify-content:center;
+align-items:center;
+z-index:999999;
+">
+    <button onclick="startFullscreen()" style="
+    padding:20px 40px;
+    font-size:24px;
+    font-weight:bold;
+    cursor:pointer;
+    border:none;
+    border-radius:10px;
+    background:#4ade80;
+    color:#000;
+    ">
+        PLAY FULLSCREEN
+    </button>
+</div>
+
+<script>
+function startFullscreen() {
+    const elem = document.documentElement;
+
+    if (elem.requestFullscreen) {
+        elem.requestFullscreen();
+    } else if (elem.webkitRequestFullscreen) {
+        elem.webkitRequestFullscreen();
+    } else if (elem.msRequestFullscreen) {
+        elem.msRequestFullscreen();
+    }
+
+    document.getElementById("fullscreen-start").style.display = "none";
+}
+
+document.addEventListener("fullscreenchange", () => {
+    const overlay = document.getElementById("fullscreen-start");
+
+    if (!document.fullscreenElement) {
+        overlay.style.display = "flex";
+    } else {
+        overlay.style.display = "none";
+    }
+});
+</script>
+</body>
+</html>
