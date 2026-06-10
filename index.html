@@ -910,29 +910,5 @@ z-index:999999;
 </div>
 
 <script>
-function startFullscreen() {
-    const elem = document.documentElement;
-
-    if (elem.requestFullscreen) {
-        elem.requestFullscreen();
-    } else if (elem.webkitRequestFullscreen) {
-        elem.webkitRequestFullscreen();
-    } else if (elem.msRequestFullscreen) {
-        elem.msRequestFullscreen();
-    }
-
-    document.getElementById("fullscreen-start").style.display = "none";
-}
-
-document.addEventListener("fullscreenchange", () => {
-    const overlay = document.getElementById("fullscreen-start");
-
-    if (!document.fullscreenElement) {
-        overlay.style.display = "flex";
-    } else {
-        overlay.style.display = "none";
-    }
-});
-</script>
 </body>
 </html>
